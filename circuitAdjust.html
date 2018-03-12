@@ -1,0 +1,1108 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8'/>
+<style>
+
+	*{margin:0;padding:0;}
+	html{ width:100%;height:100%;}
+	body{ width:100%;height:100%;}
+	.wrap{
+	    width:100%;height:100%;
+		display:table;  
+		margin:auto;
+	    *position:relative;  
+    }
+	.hack{
+	    display:table-cell;vertical-align:middle;
+	    *position:absolute;*top:50%;
+    }
+    .cnt{
+		text-align:center;
+        *position:relative;*top:-50%;
+    }
+	#chart{
+		width:600px;
+		height:600px;
+	}
+</style>
+<script src = "math.min.js"> </script>
+<script src = "FileSaver.min.js"> </script>
+</head>
+<body>
+	<button onclick="saveCircuit()">保存模型</button>
+	<button onclick="loadCircuit()">载入模型</button>
+	<input id="file-input" name="name" style="display: none;" type="file">
+	<script>
+	function saveCircuit(){
+		saveJSONtoFile(chart.Circuit, "out.sch");		
+	}
+	function loadCircuit() {
+	   document.getElementById('file-input').click();
+	}
+	document.getElementById('file-input').addEventListener('change', handleFileOpen, false);
+	 
+	function handleFileOpen(e) {
+		var file = e.target.files[0];
+		//var files = evt.target.files; // FileList object
+		console.log(file);
+		if (!file) {
+			return;
+		}
+		// else if (!file.type.match('text.*')) 
+		// {
+		//   alert(file.name + " is not a valid text file");
+		// } 
+		else if(file) 
+		{
+			var reader = new FileReader();
+			reader.onload = function(e)
+				 {
+					var contents = reader.result;
+					// alert( "Got the file. " 
+					//         +"name: " + file.name + "\n "
+					//         +"type: " + file.type + "\n "
+					//         +"size: " + file.size + " bytes\n"
+					//         + "starts with: " + contents.substr(1, contents.indexOf("n"))
+					//         + " " + contents.substr(2, 3)
+					//     );
+					var schObj1 =tryParseJSON(contents);
+					if( schObj1 && file.size < 65536)  // added a 64K requirement- to have some bounds
+					{
+						chart.Circuit = SmithChart.CopyCircuit(schObj1)
+						chart.draw();
+					}  
+					else alert("File too long (>64K) or the of the wrong format")
+					
+				}
+			reader.readAsText(file); 
+			document.getElementById('file-input').value = null; // this clears the file read 
+	   }
+	   else
+	   {
+			alert("Failed to load file");
+	   }
+
+	}
+	function tryParseJSON (jsonString){
+		try {
+			var o = JSON.parse(jsonString, math.json.reviver);;
+
+			// Handle non-exception-throwing cases:
+			// Neither JSON.parse(false) or JSON.parse(1234) throw errors, hence the type-checking,
+			// but... JSON.parse(null) returns null, and typeof null === "object", 
+			// so we must check for that, too. Thankfully, null is falsey, so this suffices:
+			if (o && typeof o === "object") {
+				return o;
+			}
+		}
+		catch (e) { }
+
+		return false;
+	}
+	function saveJSONtoFile(data,fileName){
+	   //var FileSaver = require('file-saver');
+		var json = JSON.stringify(data, null, "\t"); //  beautified JSON
+		var blob = new Blob([json], {type: "text/plain;charset=utf-8"});
+		saveAs(blob, fileName);
+	}
+	</script>
+	<div class ='wrap' >
+	<div class ='hack' >
+	<div class ='cnt' >
+		<canvas id='chart'/>
+	</div>
+	</div>
+	</div>
+	<script>
+		//var SmithChart = window.SmithChart = SmithChart || {};
+		
+		function SmithChart(canvas){
+			canvas.style.cursor = 'crosshair';
+			
+			var h = canvas.clientHeight;
+			var w = canvas.clientWidth;
+			canvas.height = h; canvas.width = w;
+			
+			this.canvas = canvas;
+			
+			this._speed = 0.006;
+			this._Z0 = 50;
+			this._ctx = canvas.getContext('2d');
+			this._ctx.translate(w/2,h/2);
+			this._ctx.scale(w/2*0.8,-h/2*0.8);
+			this._h = h; this._w = w;
+			
+			
+				
+			this.Circuit = {};
+			this.Circuit.compensation = [];
+			
+			this.f_sim = false;
+			this.Circuit.Zload = C('5');
+			
+						
+			this.f_state = 'Idle';
+			this.opData = {};
+			
+			
+			
+			this.drawInfo = function(){		
+				var	ctx = this._ctx;	
+				
+				ctx.font="0.07px Times";
+				ctx.fillStyle='#800';
+				
+				switch(this.f_state){
+					case 'Idle':
+						ctx.save();
+						ctx.translate(-1.25, 1.0);
+						ctx.scale(1,-1);
+						ctx.fillText('  State : '+this.f_state,0,0);
+						ctx.restore();
+					break;
+					case 'Add':
+						ctx.save();
+						ctx.translate(-1.25, 1.0);
+						ctx.scale(1,-1);
+						ctx.fillText('  State : '+this.f_state,0,0);
+						ctx.fillText('  Type  : '+this.opData.add.mode, 0,0.08);
+						ctx.restore();
+					break;
+					case 'Adjust':
+						ctx.save();
+						ctx.translate(-1.25, 1.0);
+						ctx.scale(1,-1);
+						ctx.fillText('  State : '+this.f_state,0,0);
+						ctx.fillText('  Target: Z'+this.opData.adjust.target, 0,0.08);
+						ctx.restore();
+					break;
+					default:
+						ctx.save();
+						ctx.translate(-1.25, 1.0);
+						ctx.scale(1,-1);
+						ctx.fillText('  State : '+this.f_state,0,0);
+						ctx.fillText('  Unknow OP' ,0,0);
+						ctx.restore();
+					break;
+				}
+				
+			}
+			
+			this.onKeyPress = function(event){
+				var e = event ||
+					window.event ||
+					arguments.callee.caller.arguments[0];
+					
+				if(e.key=="Escape"){
+					this.f_sim = false;
+				}
+				if(e.key=="t"){	//	t
+					switch(this.f_state){
+						case 'Idle':		
+							this.f_state ='Add';
+							this._speed = 0.006;
+							
+							this.opData.add = this.opData.add||{};
+							this.opData.add.mode = 0;
+							this.opData.add.Zsrc = this.getZ(this.Circuit.compensation.length);
+							this.opData.add.Zdest = this.opData.add.Zsrc;
+						break;
+						case 'Add':
+							this.f_state ='Adjust';
+							this._speed = 0.02;
+							
+							this.opData.adjust = this.opData.adjust||{} ;
+							this.opData.adjust.target = this.Circuit.compensation.length;
+							this.opData.adjust.Zdest = this.getZ(this.opData.adjust.target);
+						break;
+						case 'Adjust':
+							this.f_state ='Idle';
+							this._speed = 0.006;
+						break;
+						default:
+						break;
+					}
+				}			
+				if(e.key=="a"){  // a
+					switch(this.f_state){
+						case 'Add':
+							if (this.opData.add.mode >2){
+								this.opData.add.mode = 0 ;
+							}else{
+								this.opData.add.mode +=1;
+							}
+						break;
+						case 'Adjust':
+							if (this.opData.adjust.target >= this.Circuit.compensation.length){
+								this.opData.adjust.target = 0 ;
+							}else{
+								this.opData.adjust.target +=1;
+							}
+						break;
+						default:
+						break;						
+					}
+				}
+				if(e.key=="r"){  // r
+					this.f_state ='Idle';
+					this.Circuit.compensation = [];
+					this.Circuit.Zload = C('5');
+				}
+				this.draw();
+			}
+			
+			this.onMouseDown = function(event){
+				var px, py;
+				if (event.offsetX){
+					px = Number(event.offsetX); //页面触点X坐标
+					py = Number(event.offsetY); //页面触点Y坐标
+				}else{
+					var touch = event.touches[0]; //获取第一个触点
+					px = Number(touch.pageX); //页面触点X坐标
+					py = Number(touch.pageY); //页面触点Y坐标
+					console.log(px, py);
+				}
+				this.f_sim = true;
+			}
+			
+			this.onMouseUp = function(event){
+				var px, py;
+				if (event.offsetX){
+					px = Number(event.offsetX); //页面触点X坐标
+					py = Number(event.offsetY); //页面触点Y坐标
+				}else{
+					var touch = event.touches[0]; //获取第一个触点
+					px = Number(touch.pageX); //页面触点X坐标
+					py = Number(touch.pageY); //页面触点Y坐标
+					console.log(px, py);
+				}
+				if (this.f_sim){
+					this.f_sim = false;
+					
+					switch(this.f_state){
+						case 'Add':							
+							var sim_result = SmithChart.simCouple(
+								this.opData.add.Zsrc,
+								this.opData.add.Zdest,
+								this.opData.add.mode);
+							
+							if (isNaN(sim_result[0].Z.im)){
+								return;
+							}
+							this.Circuit.compensation = this.Circuit.compensation.concat(sim_result);
+														
+							this.opData.add.Zsrc = this.getZ(this.Circuit.compensation.length);
+						break;
+						case 'Adjust':							
+							var sim_result = SmithChart.AdjustCircuit(
+								this.Circuit,
+								this.opData.adjust.target, 	
+								this.opData.adjust.Zdest);
+							
+							this.Circuit = sim_result;							
+						break;
+						default:
+						break;						
+					}
+					
+				}
+				this.draw();
+			}
+			
+			this.onMouseMove = function(event){
+				var px, py;
+				if (event.offsetX){
+					px = Number(event.offsetX); //页面触点X坐标
+					py = Number(event.offsetY); //页面触点Y坐标
+				}else{
+					var touch = event.touches[0]; //获取第一个触点
+					px = Number(touch.pageX); //页面触点X坐标
+					py = Number(touch.pageY); //页面触点Y坐标
+					console.log(px, py);
+				}
+				if (this.f_sim){
+					switch(this.f_state){
+						case 'Add':
+							Zdest = this.ScreentoZ(px,py);
+							this.opData.add.Zdest = Zdest.clone();
+						break;
+						case 'Adjust':
+							Zdest = this.ScreentoZ(px,py);
+							this.opData.adjust.Zdest = Zdest.clone(); 
+						break;
+						default:
+						break;						
+					}
+					this.draw();
+				}
+			}
+			
+			this.drawExtra = function(){
+				switch(this.f_state){
+					case 'Add':
+						var Zsrc = this.Circuit.Zload;
+						// this.drawPoint(Zsrc);
+						for (var component of this.Circuit.compensation){
+							Zsrc = this.drawZ(Zsrc, component);
+						}
+						
+						this.drawPoint(this.getZ(this.Circuit.compensation.length));
+						if (this.f_sim){							
+							var sim_result = SmithChart.simCouple(
+								this.opData.add.Zsrc,
+								this.opData.add.Zdest,
+								this.opData.add.mode);
+							
+							var temp = this.opData.add.Zsrc;
+							for (var component of sim_result){
+								temp = this.drawZ(temp, component);
+							}
+							this.drawPoint(this.opData.add.Zdest, 0.02);
+						}
+						
+					break;
+					case 'Adjust':
+						var ctx = this._ctx;
+						chart.drawSubline_Q(1);
+						chart.drawSubline_Q(-1);
+						if (!this.f_sim){	
+							ctx.globalAlpha=1;
+							
+							var Zsrc = this.Circuit.Zload;
+							for (var component of this.Circuit.compensation){
+								Zsrc = this.drawZ(Zsrc, component);
+							}
+							this.drawPoint(this.getZ(this.opData.adjust.target));
+							
+							this.drawlocus_R(this.Circuit);
+							this.drawlocus_Cs(this.Circuit);
+						}else{
+							ctx.globalAlpha=0.2;
+							
+							var Zsrc = this.Circuit.Zload;
+							for (var component of this.Circuit.compensation){
+								Zsrc = this.drawZ(Zsrc, component);
+							}
+							
+							ctx.globalAlpha=1;
+							
+							var sim_result = SmithChart.AdjustCircuit(
+								this.Circuit,
+								this.opData.adjust.target, 	
+								this.opData.adjust.Zdest);
+								
+							var temp = sim_result.Zload;
+							for (var component of sim_result.compensation){
+								temp = this.drawZ(temp, component);
+							}
+							this.drawPoint(this.opData.adjust.Zdest,0.02);
+							ctx.globalAlpha=1;
+							
+							this.drawlocus_R(sim_result);
+							this.drawlocus_Cs(sim_result);
+						}
+					break;
+					case 'Idle':
+						var Zsrc = this.Circuit.Zload;
+						// this.drawPoint(Zsrc);
+						for (var component of this.Circuit.compensation){
+							Zsrc = this.drawZ(Zsrc, component);
+						}
+						this.drawPoint(this.getZ(this.Circuit.compensation.length));
+					break;
+					default:
+					break;
+				}
+			}
+			
+			/**
+			 *  Draw All
+			 */
+			this.draw = function (){
+				var	ctx = this._ctx;
+				ctx.clearRect(-1.25,-1.25,2.5,2.5); 
+				this.drawSmith();
+				this.drawInfo();
+				this.drawExtra();
+			}
+			
+			
+			
+			this.drawZ = function(Zsrc, component){
+				var Zend;
+				Zend = this.drawArc(Zsrc, component.type, component.Z);
+				return Zend;
+			}
+						
+			
+			/**
+			 *  Draw BackGournd of Smith chart
+			 */		
+			this.drawSmith = function(){
+				var	ctx = this._ctx;
+				
+				//  lines
+				ctx.lineWidth=0.002;
+				ctx.strokeStyle='#888';
+				//     base
+				ctx.beginPath();
+				ctx.arc(0,0,1,0,2*Math.PI,false);
+				ctx.closePath();
+				ctx.stroke();
+				ctx.beginPath();
+				ctx.moveTo(-1,0);
+				ctx.lineTo(1,0);
+				ctx.stroke();
+				ctx.closePath();
+				//     circles of conductance
+				for (var rr of [0.2,0.5,1,1.5,2,4]){
+					var xc=rr/(1+rr);
+					var rd=1-xc;
+					ctx.beginPath();
+					ctx.arc(xc,0,rd,0,2*Math.PI,false);
+					ctx.closePath();
+					ctx.stroke();
+				}
+				//     circles of reactance
+				for (var xx of [0.2,0.5,1,1.5,2,4]){
+					var rd= 1/xx;
+					var alpha_xx = 2*Math.atan(1/xx);
+					ctx.beginPath();
+					ctx.arc(1,rd,rd,1.5*Math.PI,0.5*Math.PI+alpha_xx,true);
+					ctx.stroke();
+					ctx.closePath();
+					ctx.beginPath();
+					ctx.arc(1,-rd,rd,-1.5*Math.PI,-0.5*Math.PI-alpha_xx,false);
+					ctx.stroke();
+					ctx.closePath();
+				}
+					
+				// ticks
+				ctx.font="0.07px Times";
+				ctx.fillStyle='#800';
+				
+				ctx.fillText('0', -1.1, 0);
+				ctx.fillText('∞', 1.05, 0);
+				for (var rr of [0.2,0.5,1,1.5,2,4]){
+					var xc=rr/(1+rr);
+					ctx.save();
+					ctx.translate(2*xc-1,0);
+					ctx.scale(1,-1);
+					ctx.rotate(-90*Math.PI/180);
+					ctx.fillText(rr, 0, 0);
+					ctx.restore();
+				}
+				for (var xx of [0.2,0.5,1,1.5,2,4]){
+					var alpha_xx = 2*Math.atan(1/xx);
+					ctx.save();
+					ctx.scale(1,-1);
+					var tx = 1.1*Math.cos(alpha_xx)-0.04;
+					var ty = 1.1*Math.sin(alpha_xx);
+					ctx.fillText('+'+xx, tx, ty);
+					ctx.restore();
+					ctx.save();
+					ctx.scale(1,-1);
+					var tx = 1.1*Math.cos(-alpha_xx)-0.04;
+					var ty = 1.1*Math.sin(-alpha_xx);
+					ctx.fillText('-'+xx, tx, ty);
+					ctx.restore();
+				}
+				
+			}
+			
+			this.drawSubline_Q = function(Q){
+				var ctx = this._ctx;
+				
+				rd = math.sqrt(1+1/Q/Q);
+				cx = 0; cy = -1/Q; theta = math.atan(1/(1/Q));
+				
+				ctx.lineWidth=0.001;
+				ctx.strokeStyle='#f00';
+				
+				//     circles of Q
+				ctx.beginPath();
+				if (Q >0)
+					ctx.arc(cx,cy,rd, math.PI/2-theta, math.PI/2+theta,false);
+				else
+					ctx.arc(cx,cy,rd, -math.PI/2-theta, -math.PI/2+theta,true);
+				ctx.stroke();
+				ctx.closePath();
+			}
+			
+			this.drawlocus_Cs = function(circuit){
+				// copy
+				var test = SmithChart.CopyCircuit(circuit);
+				var end = test.compensation.length;
+				
+				var k = 0.5;
+				var locus = [];
+				
+				var id_Cs = math.floor((end+1)/2-1);
+				if (id_Cs <0)  return;
+				for (var i = 0; i < 15; i ++){
+					if (circuit.compensation[id_Cs].Z.im <0){ 
+					//Cs
+						test.compensation[id_Cs].Z = math.multiply(
+							circuit.compensation[id_Cs].Z, k);
+						k*=1.1;					
+						locus.push(this._ZtoGamma(
+							SmithChart.CircuitGetZ(test,end)));		
+					}else{                 
+					// Lm
+						var delta = 
+						math.multiply(
+							circuit.compensation[id_Cs].Z, 1-k);
+						test.compensation[id_Cs].Z = math.add(
+							circuit.compensation[id_Cs].Z, delta
+						);
+						test.compensation[id_Cs+1].Z = math.add(
+							circuit.compensation[id_Cs+1].Z, delta
+						);
+						test.compensation[id_Cs-1].Z = math.add(
+							circuit.compensation[id_Cs-1].Z, delta
+						);
+						k*=1.1;					
+						locus.push(this._ZtoGamma(
+							SmithChart.CircuitGetZ(test,end)));		
+					}						
+				}
+				this._plot(locus,'#088',0.002);
+				
+				
+			}
+			
+			this.drawlocus_R = function(circuit){
+				// copy
+				var test = SmithChart.CopyCircuit(circuit);
+				var end = test.compensation.length;
+				
+				var k = 0.01;
+				var locus = [];
+				for (var i = 0; i < 13; i ++){
+					test.Zload = math.multiply(circuit.Zload, k);
+					k*=2;					
+					locus.push(this._ZtoGamma(
+						SmithChart.CircuitGetZ(test,end)));					
+				}
+				this._plot(locus,'#080',0.002);
+				
+				var ctx = this._ctx;
+				var txtX,txtY;
+				ctx.font="0.07px Times";
+				ctx.fillStyle='#000';
+				
+				txtX = locus[0].re*1.1;
+				txtY = locus[0].im*1.1;
+				
+				ctx.save();
+				ctx.translate(txtX, txtY);
+				ctx.scale(1,-1);
+				ctx.rotate(-math.atan(txtY/txtX));
+				
+				ctx.fillText('Xshort',-ctx.measureText('Xshort').width/2,0);
+				ctx.restore();
+				
+				txtX = locus[locus.length-1].re*1.1;
+				txtY = locus[locus.length-1].im*1.1;
+				
+				ctx.save();
+				ctx.translate(txtX, txtY);
+				ctx.scale(1,-1);
+				ctx.rotate(-math.atan(txtY/txtX));
+				ctx.fillText('Xopen',-ctx.measureText('Xopen').width/2,0);
+				ctx.restore();
+			}
+			
+			/**
+			 *  Draw Arc from Zin appending Zadd in series 'S' or parallel 'P'
+			 */
+			this.drawArc = function(Zin, type, Zadd) {
+				var	ctx = this._ctx;
+				var trace = [];
+				for (var i=0;i<=1;i+=this._speed || 0.006){
+					trace.push(i);
+				}
+				trace.push(1);
+				var Ztrack = [];
+				switch(type){
+					case 'P':
+						for (var k of trace){
+							Ztrack.push(
+								math.divide(1,
+									math.add(math.divide(1,Zin),
+										math.multiply(math.divide(1,Zadd),k)
+									)
+								)
+							);
+						}
+						break;
+					case 'S':
+						for (var k of trace){
+							Ztrack.push(
+								math.add(Zin,
+									math.multiply(Zadd,k)
+								)
+							);
+						}
+						break;
+					default:
+						return Number.NaN;
+				}
+				
+				var traceGamma = [];
+				for (var zz of Ztrack){
+					traceGamma.push(this._ZtoGamma(zz));
+				}
+				this._plot(traceGamma);
+				
+				// arrow
+				var tracestart = traceGamma[1];
+				var traceend = traceGamma[traceGamma.length-1];
+				var traceend2 = traceGamma[traceGamma.length-2];
+				d1 = math.multiply(math.subtract(traceend2,traceend),C('1+0.3i'));
+				d1 = math.divide(d1,d1.abs());
+				d2 = math.multiply(math.subtract(traceend2,traceend),C('1-0.3i'));
+				d2 = math.divide(d2,d2.abs());
+				scale = math.subtract(tracestart, traceend).abs()*0.02+0.02;
+				var arrow = [];
+				for (var kk of [d1, 0, d2]){
+					arrow.push(math.add(traceend, math.multiply(scale, kk)));
+				}
+				this._plot(arrow);
+				
+				return Ztrack[Ztrack.length-1]
+			}
+			
+			/**
+			 *  Draw array of gamma 
+			 */
+			this._plot = function(gamma,color='#00f', width = 0.01){
+				var	ctx = this._ctx;
+				ctx.strokeStyle = color;
+				ctx.lineWidth=width;
+				ctx.beginPath();
+				ctx.moveTo(gamma[0].re, gamma[0].im);
+				for	(var i=1;i<gamma.length;i++){
+					ctx.lineTo(gamma[i].re, gamma[i].im);	
+				}
+				ctx.stroke();
+				ctx.closePath();
+			};
+			
+			/**
+			 *  Draw Point of Z
+			 */
+			this.drawPoint = function(Z, size = 0.01, color = '#f00',textStyle = "0.07px Times"){
+				var	ctx = this._ctx;
+				ctx.font=textStyle;
+				ctx.fillStyle=color;
+				
+				var gamma = this._ZtoGamma(Z);
+				ctx.beginPath();
+				ctx.arc(gamma.re,gamma.im,size,0,2*Math.PI);
+				ctx.closePath();
+				ctx.fill();
+				
+				ctx.fillStyle=color;
+				ctx.save();
+				ctx.translate(gamma.re + size,gamma.im+size);
+				ctx.scale(1,-1);
+				ctx.fillText(Number(Z.re).toFixed(1)+((Z.im>=0)?'+':'')+Number(Z.im).toFixed(1)+'i',0 ,0 );
+				ctx.restore();
+			};
+			
+			/**
+			 *  Convert Z to Gamma
+			 */
+			this._ZtoGamma = function(Z){
+				var gamma = math.divide(math.subtract(Z, this._Z0), math.add(Z, this._Z0));
+				return gamma;
+			};
+			
+			/**
+			 *  Set Z0 for Smithchart
+			 */
+			this.setZ0 = function(Z0){
+				this._Z0 = Z0;
+			};
+			
+			this.getZ = function(n){
+				var Zend = this.Circuit.Zload;
+				if (n > this.Circuit.compensation.length){
+					return Number.NaN;
+				}
+				for (var ii = 0; ii< n; ii++){
+					var component = this.Circuit.compensation[ii];
+					var Zadd = component.Z;
+					var Zin = Zend;
+					var type = component.type;
+					
+					switch(type){
+						case 'P':
+							Zend = 
+								math.divide(1,
+									math.add(math.divide(1,Zin),math.divide(1,Zadd))
+								);
+						break;
+						case 'S':
+							Zend = 
+								math.add(Zin, Zadd);
+						break;
+						default:
+							Zend = Number.NaN;
+					}
+				}
+				return Zend;
+			};
+			
+			this.ScreentoZ = function(px, py){
+				var gamma = math.complex(px/this._w *2.5 -1.25, 1.25 - py/this._h *2.5);
+				var Znorm = math.divide(math.add(gamma, 1), math.subtract(1, gamma));
+				return math.multiply(Znorm,this._Z0) ;
+			};
+			
+			
+			return this;
+		}
+		
+		SmithChart.CopyCircuit = function(circuit){
+			var AD = {};
+			AD.Zload = circuit.Zload.clone();
+			AD.compensation = [];
+			for (var comp of circuit.compensation){
+				AD.compensation.push({ 
+					type : comp.type,
+					Z  :  comp.Z.clone()
+				});
+			}
+			return AD;
+		}
+		
+		SmithChart.CircuitGetZ = function(circuit,n){
+			var Zend = circuit.Zload;
+			if (n > circuit.compensation.length){
+				return Number.NaN;
+			}
+			for (var ii = 0; ii< n; ii++){
+				var component = circuit.compensation[ii];
+				var Zadd = component.Z;
+				var Zin = Zend;
+				var type = component.type;
+				
+				switch(type){
+					case 'P':
+						Zend = 
+							math.divide(1,
+								math.add(math.divide(1,Zin),math.divide(1,Zadd))
+							);
+					break;
+					case 'S':
+						Zend = 
+							math.add(Zin, Zadd);
+					break;
+					default:
+						Zend = Number.NaN;
+				}
+			}
+			return Zend;
+		};
+			
+		SmithChart.simCouple = function(Zsrc, Zdest, mode){
+			var result = [{},{}];
+			switch (mode){
+					case 3:
+					resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+					result[0].type = 'P'; result[0].Z = math.complex(0,resultSP[0].Xp);
+					result[1].type = 'S'; result[1].Z = math.complex(0,resultSP[0].Xs);
+					break;
+					case 2:
+					resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+					result[0].type = 'P'; result[0].Z = math.complex(0,resultSP[1].Xp);
+					result[1].type = 'S'; result[1].Z = math.complex(0,resultSP[1].Xs);
+					break;
+					case 1:
+					resultPS = SmithChart.PScouple(Zsrc, Zdest);
+					result[0].type = 'S'; result[0].Z = math.complex(0,resultPS[0].Xs);
+					result[1].type = 'P'; result[1].Z = math.complex(0,resultPS[0].Xp);
+					break;
+					case 0:
+					resultPS = SmithChart.PScouple(Zsrc, Zdest);
+					result[0].type = 'S'; result[0].Z = math.complex(0,resultPS[1].Xs);
+					result[1].type = 'P'; result[1].Z = math.complex(0,resultPS[1].Xp);
+					default:
+					break;
+				}
+			return result;
+		}
+		
+		
+		SmithChart._AdjustPrev = function(AD,target,Zdest){
+			var Zmid = SmithChart.CircuitGetZ(AD,target-1);
+			var results = []; var deltas = [];
+			
+			results = results.concat(SmithChart.PScouple(Zsrc, Zdest));
+			
+			
+		// find the closest solution
+			Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+			resultPS = SmithChart.PScouple(Zsrc, Zdest);
+			X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+			X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+		
+		math.subtract().abs();
+		}
+		SmithChart._AdjustNext = function(AD,target,Zdest){
+			var Zmid = SmithChart.CircuitGetZ(AD,target-1);
+			var results = []; var deltas = [];
+			
+			results = results.concat(SmithChart.PScouple(Zsrc, Zdest));
+			
+			
+		// find the closest solution
+			Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+			resultPS = SmithChart.PScouple(Zsrc, Zdest);
+			X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+			X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+		
+		math.subtract().abs();
+		}
+		
+		SmithChart.AdjustCircuit = function(circuit,target, Zad){
+			// copy
+			var AD = SmithChart.CopyCircuit(circuit);
+			var X = AD.compensation;
+			
+			if (target == 0){
+				AD.Zload = Zad;				
+			}else if (target == X.length){
+				// prev stage
+				if (X[target-2].type == 'S' && X[target-1].type == 'P'){
+					if(X[target-2].Z.im >=0){
+						mode = 0;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+					}else{
+						mode = 1;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
+					
+					}
+					
+				}else if(X[target-2].type == 'P' && X[target-1].type == 'S'){
+					if(X[target-2].Z.im <=0){
+						mode = 2;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
+					}else{
+						mode = 3;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);	
+					}
+					
+				}else{
+					return circuit;
+				}
+				if (isNaN(X[target-1].Z.im)){
+					return circuit;
+				}
+			}
+			
+			var mode,Zsrc,Zdest;
+			if (target >=2 && target <= X.length-2){
+				// next stage
+				if (X[target].type == 'S' && X[target+1].type == 'P'){
+					if(X[target+0].Z.im >=0){
+						mode = 0;
+						Zsrc = Zad;
+						Zdest = SmithChart.CircuitGetZ(AD,target+2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[1].Xs);
+						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[1].Xp);
+					}else{
+						mode = 1;
+						Zsrc = Zad;
+						Zdest = SmithChart.CircuitGetZ(AD,target+2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[0].Xs);
+						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[0].Xp);
+					
+					}
+					
+				}else if(X[target].type == 'P' && X[target+1].type == 'S'){
+				
+					if(X[target+0].Z.im <=0){
+						mode = 2;
+						Zsrc = Zad;
+						Zdest = SmithChart.CircuitGetZ(AD,target+2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[1].Xp);
+						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[1].Xs);
+					}else{
+						mode = 3;
+						Zsrc = Zad;
+						Zdest = SmithChart.CircuitGetZ(AD,target+2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[0].Xp);
+						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[0].Xs);
+					}
+					
+				}else{
+					return circuit;
+				}
+				if (isNaN(X[target+0].Z.im)){
+					return circuit;
+				}
+				// prev stage
+				if (X[target-2].type == 'S' && X[target-1].type == 'P'){
+					if(X[target-2].Z.im >=0){
+					
+						mode = 0;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+					}else{
+						mode = 1;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultPS = SmithChart.PScouple(Zsrc, Zdest);
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
+					
+					}
+					
+				}else if(X[target-2].type == 'P' && X[target-1].type == 'S'){
+					if(X[target-2].Z.im <=0){
+						mode = 2;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
+					}else{
+						mode = 3;
+						Zdest = Zad;
+						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
+						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);	
+					}
+					
+				}else{
+					return circuit;
+				}
+				if (isNaN(X[target-1].Z.im)){
+					return circuit;
+				}
+			}
+			
+			
+			return AD;
+		};
+		/**
+		 *			  -------jXs -------                       -----
+		 *			 |              |  |                      |      |
+		 *	Usrc, Zsrc             jXp Zload    <=>   Usrc, Zsrc     Zsrc
+		 *			 |              |  |                      |      |
+		 *			  ------------------                       -----
+		 *	 Zs = Zsrc; Zd = Zload;
+		 *		1          1       1
+		 *	---------  =  ---  + ------
+		 *	 Zs - jXs     jXp      Zd 
+         */
+		SmithChart.SPcouple = function(Zload,Zsrc){
+			var result = [];
+			rZd = Zload.re;
+			iZd = Zload.im;
+			rZs = Zsrc.re;
+			iZs = Zsrc.im;
+			
+			A = (-rZd)/(rZd - rZs);
+			B = (rZs * iZd + iZs * rZd)/(rZd - rZs);
+			a = A;
+			b = (B + A*iZd + iZd - A*iZs);
+			c = (B*iZd +rZs*rZd-iZs*iZd -B*iZs);
+			
+			result[0] = {};
+			result[0].Xs = (-b + math.sqrt(b*b-4*a*c))/ (2*a);
+			result[0].Xp =  A*result[0].Xs + B;
+			
+			result[1] = {};
+			result[1].Xs = (-b - math.sqrt(b*b-4*a*c))/ (2*a);
+			result[1].Xp =  A*result[1].Xs + B;
+			
+			//Xs = [(-b + sqrt(b^2-4*a*c))/ (2*a) ;(-b - sqrt(b^2-4*a*c))/ (2*a) ];
+			//Xp = A.*Xs + B;
+			return result;
+		}
+		
+		/**
+		 *
+		 *       ----------jXs ---                        -----
+		 *		 |      |         |                      |      |
+		 * Usrc, Zsrc    jXp        Zload    <=>   Usrc, Zsrc     Zsrc
+		 *		 |      |         |                      |      |
+		 *		  -----------------                        -----
+		 *   Zs = Zsrc; Zd = Zload;
+		 *   1       1          1
+		 *  ---  =  ---  + -----------
+		 *   Zs     jXp      Zd + jXs
+		 */
+		SmithChart.PScouple = function(Zload,Zsrc){
+			var result = [];
+			rZd = Zload.re;
+			iZd = Zload.im;
+			rZs = Zsrc.re;
+			iZs = Zsrc.im;
+			
+			A = (rZs) / (rZd - rZs);
+			B = (rZs * iZd + iZs * rZd)/(rZd - rZs);
+			a = A;
+			b = (B + A*iZd - iZs - A*iZs);
+			c = (B*iZd +rZs*rZd-iZs*iZd -B*iZs);
+						
+			result[0] = {};
+			result[0].Xs = (-b + math.sqrt(b*b-4*a*c))/ (2*a);
+			result[0].Xp =  A*result[0].Xs + B;
+			
+			result[1] = {};
+			result[1].Xs = (-b - math.sqrt(b*b-4*a*c))/ (2*a);
+			result[1].Xp =  A*result[1].Xs + B;
+			
+			return result;
+		}
+		
+	</script>
+	
+	
+	<script>
+		var C = math.complex;
+		
+		var canvas = document.getElementById('chart');
+		var chart = new SmithChart( canvas);
+		
+		canvas.onmousemove = function(event){ chart.onMouseMove(event);};
+		canvas.onmousedown = function(event){ chart.onMouseDown(event);};
+		canvas.onmouseup = function(event){ chart.onMouseUp(event);};
+		window.onkeypress = function(event){ chart.onKeyPress(event);};
+			
+		chart.draw();
+		
+	</script>
+	
+</body>
+</html>
