@@ -213,7 +213,7 @@
 							this._speed = 0.02;
 							
 							this.opData.adjust = this.opData.adjust||{} ;
-							this.opData.adjust.target = this.Circuit.compensation.length;
+							this.opData.adjust.target = 0;
 							this.opData.adjust.Zdest = this.getZ(this.opData.adjust.target);
 						break;
 						case 'Adjust':
@@ -243,7 +243,7 @@
 						default:
 						break;						
 					}
-				}
+				}		
 				if(e.key=="r"){  // r
 					this.f_state ='Idle';
 					this.Circuit.compensation = [];
@@ -264,6 +264,7 @@
 					console.log(px, py);
 				}
 				this.f_sim = true;
+				SmithChart.AdjustHistory = undefined;
 			}
 			
 			this.onMouseUp = function(event){
@@ -836,181 +837,164 @@
 			return result;
 		}
 		
-		
-		SmithChart._AdjustPrev = function(AD,target,Zdest){
-			var Zmid = SmithChart.CircuitGetZ(AD,target-1);
-			var results = []; var deltas = [];
+
+		/**
+		 * Get Closest Adjustion to AD, if can't ,return false
+		 */
+		SmithChart._AdjustZmid = function(AD,target,Zmid,ref){
+			var X = AD.compensation;
 			
-			results = results.concat(SmithChart.PScouple(Zsrc, Zdest));
-			
-			
-		// find the closest solution
-			Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-			resultPS = SmithChart.PScouple(Zsrc, Zdest);
-			X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
-			X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
-		
-		math.subtract().abs();
+			if (target == X.length) {
+				var Zprev2 = SmithChart.CircuitGetZ(AD,target-2);
+				if (target-2 <0) return false;
+				if ( X[target-2].type == 'S' && X[target-1].type == 'P'){
+					var resultPS = SmithChart.PScouple(Zprev2, Zmid);
+					if (isNaN(resultPS[0].Xs)){
+						return false;
+					}
+					var prev = ref.compensation[target-2].Z.im;
+					if ( math.abs(prev - resultPS[0].Xs) < math.abs(prev - resultPS[1].Xs)){
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
+					}else{
+						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+					}
+				}else if ( X[target-2].type == 'P' && X[target-1].type == 'S'){
+					var resultSP = SmithChart.SPcouple(Zprev2, Zmid);
+					if (isNaN(resultSP[0].Xs)){
+						return false;
+					}
+					var prev = ref.compensation[target-2].Z.im;
+					if (math.abs(prev - resultSP[0].Xp) < math.abs(prev - resultSP[1].Xp)){
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
+					}else{
+						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
+						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
+					}
+				}else{
+					return false;
+				}
+				return true;
+			}
+			if (target == 0){
+				var Znext2 = SmithChart.CircuitGetZ(AD,target+2);
+				if (target+1 >=X.length) return false;
+				if ( X[target+0].type == 'S' && X[target+1].type == 'P'){
+					var resultPS = SmithChart.PScouple(Zmid, Znext2);
+					if (isNaN(resultPS[0].Xs)){
+						return false;
+					}
+					var prev = ref.compensation[target+1].Z.im;
+					if (math.abs(prev - resultPS[0].Xp) < math.abs(prev - resultPS[1].Xp)){
+						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[0].Xs);
+						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[0].Xp);
+					}else{
+						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[1].Xs);
+						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[1].Xp);
+					}
+				}else if ( X[target+0].type == 'P' && X[target+1].type == 'S'){
+					var resultSP = SmithChart.SPcouple(Zmid, Znext2);
+					if (isNaN(resultSP[0].Xs)){
+						return false;
+					}
+					var prev = ref.compensation[target+1].Z.im;
+					if (math.abs(prev - resultSP[0].Xs) < math.abs(prev - resultSP[1].Xs)){
+						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[0].Xs);
+						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[0].Xp);
+					}else{
+						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[1].Xs);
+						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[1].Xp);
+					}
+				}else{
+					return false;
+				}
+				return true;
+			}
+		//	ADjustPrev
+			var Zprev2 = SmithChart.CircuitGetZ(AD,target-2);
+			var Znext2 = SmithChart.CircuitGetZ(AD,target+2);
+			if (target-2 <0) return false;
+			if ( X[target-2].type == 'S' && X[target-1].type == 'P'){
+				var resultPS = SmithChart.PScouple(Zprev2, Zmid);
+				if (isNaN(resultPS[0].Xs)){
+					return false;
+				}
+				var prev = ref.compensation[target-2].Z.im;
+				if (math.abs(prev - resultPS[0].Xs) < math.abs(prev - resultPS[1].Xs)){
+					X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
+					X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
+				}else{
+					X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
+					X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
+				}
+			}else if ( X[target-2].type == 'P' && X[target-1].type == 'S'){
+				var resultSP = SmithChart.SPcouple(Zprev2, Zmid);
+				if (isNaN(resultSP[0].Xs)){
+					return false;
+				}
+				var prev = ref.compensation[target-2].Z.im;
+				if (math.abs(prev - resultSP[0].Xp) < math.abs(prev - resultSP[1].Xp)){
+					X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);
+					X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
+				}else{
+					X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
+					X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
+				}
+			}else{
+				return false;
+			}
+		//	ADjustNext
+			if (target+1 >=X.length) return false;
+			if ( X[target+0].type == 'S' && X[target+1].type == 'P'){
+				var resultPS = SmithChart.PScouple(Zmid, Znext2);
+				if (isNaN(resultPS[0].Xs)){
+					return false;
+				}
+				var prev = ref.compensation[target+1].Z.im;
+				if (math.abs(prev - resultPS[0].Xp) < math.abs(prev - resultPS[1].Xp)){
+					X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[0].Xs);
+					X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[0].Xp);
+				}else{
+					X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[1].Xs);
+					X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[1].Xp);
+				}
+			}else if ( X[target+0].type == 'P' && X[target+1].type == 'S'){
+				var resultSP = SmithChart.SPcouple(Zmid, Znext2);
+				if (isNaN(resultSP[0].Xs)){
+					return false;
+				}
+				var prev = ref.compensation[target+1].Z.im;
+				if (math.abs(prev - resultSP[0].Xs) < math.abs(prev - resultSP[1].Xs)){
+					X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[0].Xs);
+					X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[0].Xp);
+				}else{
+					X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[1].Xs);
+					X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[1].Xp);
+				}
+			}else{
+				return false;
+			}
+			return true;
 		}
-		SmithChart._AdjustNext = function(AD,target,Zdest){
-			var Zmid = SmithChart.CircuitGetZ(AD,target-1);
-			var results = []; var deltas = [];
-			
-			results = results.concat(SmithChart.PScouple(Zsrc, Zdest));
-			
-			
-		// find the closest solution
-			Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-			resultPS = SmithChart.PScouple(Zsrc, Zdest);
-			X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
-			X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
 		
-		math.subtract().abs();
-		}
-		
+		SmithChart.AdjustHistory = undefined;
 		SmithChart.AdjustCircuit = function(circuit,target, Zad){
 			// copy
 			var AD = SmithChart.CopyCircuit(circuit);
+			var ref = SmithChart.AdjustHistory || SmithChart.CopyCircuit(circuit);
 			var X = AD.compensation;
 			
 			if (target == 0){
-				AD.Zload = Zad;				
-			}else if (target == X.length){
-				// prev stage
-				if (X[target-2].type == 'S' && X[target-1].type == 'P'){
-					if(X[target-2].Z.im >=0){
-						mode = 0;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
-						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
-					}else{
-						mode = 1;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
-						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
-					
-					}
-					
-				}else if(X[target-2].type == 'P' && X[target-1].type == 'S'){
-					if(X[target-2].Z.im <=0){
-						mode = 2;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
-						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
-					}else{
-						mode = 3;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
-						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);	
-					}
-					
-				}else{
-					return circuit;
-				}
-				if (isNaN(X[target-1].Z.im)){
-					return circuit;
-				}
-			}
-			
-			var mode,Zsrc,Zdest;
-			if (target >=2 && target <= X.length-2){
-				// next stage
-				if (X[target].type == 'S' && X[target+1].type == 'P'){
-					if(X[target+0].Z.im >=0){
-						mode = 0;
-						Zsrc = Zad;
-						Zdest = SmithChart.CircuitGetZ(AD,target+2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[1].Xs);
-						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[1].Xp);
-					}else{
-						mode = 1;
-						Zsrc = Zad;
-						Zdest = SmithChart.CircuitGetZ(AD,target+2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target+0].type = 'S'; X[target+0].Z = math.complex(0,resultPS[0].Xs);
-						X[target+1].type = 'P'; X[target+1].Z = math.complex(0,resultPS[0].Xp);
-					
-					}
-					
-				}else if(X[target].type == 'P' && X[target+1].type == 'S'){
+				AD.Zload = Zad;
 				
-					if(X[target+0].Z.im <=0){
-						mode = 2;
-						Zsrc = Zad;
-						Zdest = SmithChart.CircuitGetZ(AD,target+2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[1].Xp);
-						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[1].Xs);
-					}else{
-						mode = 3;
-						Zsrc = Zad;
-						Zdest = SmithChart.CircuitGetZ(AD,target+2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target+0].type = 'P'; X[target+0].Z = math.complex(0,resultSP[0].Xp);
-						X[target+1].type = 'S'; X[target+1].Z = math.complex(0,resultSP[0].Xs);
-					}
-					
-				}else{
-					return circuit;
-				}
-				if (isNaN(X[target+0].Z.im)){
-					return circuit;
-				}
-				// prev stage
-				if (X[target-2].type == 'S' && X[target-1].type == 'P'){
-					if(X[target-2].Z.im >=0){
-					
-						mode = 0;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[1].Xs);
-						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[1].Xp);
-					}else{
-						mode = 1;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultPS = SmithChart.PScouple(Zsrc, Zdest);
-						X[target-2].type = 'S'; X[target-2].Z = math.complex(0,resultPS[0].Xs);
-						X[target-1].type = 'P'; X[target-1].Z = math.complex(0,resultPS[0].Xp);
-					
-					}
-					
-				}else if(X[target-2].type == 'P' && X[target-1].type == 'S'){
-					if(X[target-2].Z.im <=0){
-						mode = 2;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[1].Xp);
-						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[1].Xs);
-					}else{
-						mode = 3;
-						Zdest = Zad;
-						Zsrc = SmithChart.CircuitGetZ(AD,target-2);
-						resultSP = SmithChart.SPcouple(Zsrc, Zdest);
-						X[target-2].type = 'P'; X[target-2].Z = math.complex(0,resultSP[0].Xp);
-						X[target-1].type = 'S'; X[target-1].Z = math.complex(0,resultSP[0].Xs);	
-					}
-					
-				}else{
-					return circuit;
-				}
-				if (isNaN(X[target-1].Z.im)){
-					return circuit;
-				}
+				
+			}else{
+				if (!SmithChart._AdjustZmid(AD,target,Zad,ref))  return circuit;
 			}
 			
-			
+			SmithChart.AdjustHistory = AD;
 			return AD;
 		};
 		/**
